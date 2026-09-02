@@ -1,50 +1,147 @@
-# Bug Bounty Recon & Non‑Destructive Scanning Pipeline
+# Pipeline Penetration Tester
 
-This Bash script automates the reconnaissance and non‑destructive vulnerability scanning stages of a bug bounty or authorized penetration testing engagement. It is designed to be **safe**, **polite**, and **modular**, with built‑in scope validation and rate limiting.
-
-> **Disclaimer:** Use this tool only on targets for which you have explicit written permission (e.g., an official bug bounty program or a signed pentest contract). Unauthorized scanning is illegal and unethical. The author assumes no liability for misuse.
-
----
+Advanced web application penetration testing pipeline built in Python. Automates reconnaissance, vulnerability scanning, security header checks, and authentication testing with comprehensive reporting.
 
 ## Features
 
-- **Subdomain enumeration** using passive sources (subfinder, assetfinder, crt.sh) with DNS resolution.
-- **HTTP probing & fingerprinting** with httpx (status, title, technologies).
-- **Port scanning** (top 1000 ports) with naabu (or nmap fallback).
-- **Content discovery** via katana crawling and ffuf fuzzing (with strict rate limits).
-- **Vulnerability scanning** using nuclei with CVE/misconfig templates (non‑destructive, excludes DoS and brute‑force).
-- **Deduplication and prioritization** based on nuclei severity.
-- **Structured output** (JSON/Markdown) ready for manual review and report submission.
-- **Modular design** – run the full pipeline or individual stages.
+### Reconnaissance
+- **Subdomain Enumeration** - DNS-based subdomain discovery
+- **Port Scanning** - Common port scanning with multithreading
+- **Technology Detection** - Server, framework, and CMS fingerprinting
+- **Link Crawling** - Discovers endpoints, forms, and parameters
+- **robots.txt / sitemap.xml** - Parses and identifies sensitive paths
+- **Directory Bruteforce** - Tests common directory paths
 
----
+### Vulnerability Scanning
+- **SQL Injection** - Error-based and time-based blind SQLi detection
+- **Cross-Site Scripting (XSS)** - Reflected XSS via GET and POST
+- **OS Command Injection** - Tests for command execution
+- **Local File Inclusion (LFI)** - Path traversal and file reading
+- **Server-Side Request Forgery (SSRF)** - Internal/external request testing
+- **IDOR** - Insecure Direct Object Reference detection
+- **XML External Entity (XXE)** - XML entity injection testing
 
-## Prerequisites
+### Security Headers & Misconfiguration
+- Missing security headers (CSP, HSTS, X-Frame-Options, etc.)
+- Information disclosure via headers
+- Cookie security (Secure, HttpOnly, SameSite)
+- CORS misconfiguration
+- Dangerous HTTP methods
+- Directory listing exposure
+- `.git` and `.env` file exposure
 
-All required tools must be installed and available in your `PATH`. The script checks for some tools and falls back to alternatives where possible.
+### Authentication & Session Testing
+- Session fixation
+- Session timeout/cookie expiry
+- Default credentials
+- SQL injection auth bypass
+- Weak password policy
 
-### Required tools
+### Reporting
+- **HTML** - Rich interactive report with severity badges
+- **JSON** - Machine-readable format
+- **TXT** - Plain text summary
 
-| Tool        | Purpose                              | Installation (Linux / macOS)                          |
-|-------------|--------------------------------------|-------------------------------------------------------|
-| `subfinder` | Passive subdomain enumeration        | `go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest` |
-| `assetfinder`| Subdomain discovery from multiple sources | `go install github.com/tomnomnom/assetfinder@latest` |
-| `dnsx`      | Fast DNS resolution                  | `go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest` |
-| `httpx`     | HTTP probing & fingerprinting        | `go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest` |
-| `naabu`     | Fast port scanning                   | `go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest` |
-| `katana`    | Modern web crawler                   | `go install github.com/projectdiscovery/katana/cmd/katana@latest` |
-| `ffuf`      | Directory & parameter fuzzing        | `go install github.com/ffuf/ffuf/v2@latest`          |
-| `nuclei`    | Vulnerability scanner (template‑based)| `go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest` |
-| `jq`        | JSON processing                      | `sudo apt install jq` (Debian/Ubuntu) or `brew install jq` (macOS) |
-| `nmap`      | Optional fallback port scanner       | `sudo apt install nmap`                              |
+## Installation
 
-> **Note:** Ensure `$HOME/go/bin` is in your `PATH`.
+```bash
+git clone <repository>
+cd pipeline-penetration
+pip install -r requirements.txt
+```
 
----
+## Usage
 
-## Setup
+### Basic Usage
+```bash
+python main.py -u http://example.com
+```
 
-1. Clone or download this repository.
-2. Make the script executable:
-   ```bash
-   chmod +x bug_hunter_pipeline.sh
+### With Custom Config
+```bash
+python main.py -u http://example.com -c config/myconfig.yaml
+```
+
+### Select Specific Stages
+```bash
+python main.py -u http://example.com --stages recon,security_headers,report
+```
+
+### HTML Report Only
+```bash
+python main.py -u http://example.com --format html
+```
+
+### With Proxy (e.g., Burp Suite)
+```bash
+python main.py -u http://example.com --proxy http://127.0.0.1:8080
+```
+
+### Verbose Mode
+```bash
+python main.py -u http://example.com -v
+```
+
+### All Options
+```bash
+python main.py -h
+```
+
+## Configuration
+
+Edit `config/config.yaml` to customize:
+
+- Target URL and scope
+- Pipeline stages
+- Scan modules (enable/disable)
+- Network settings (timeout, delay, retries)
+- Proxy settings
+- Report format
+- Logging level
+
+## Project Structure
+
+```
+pipeline-penetration/
+├── config/
+│   └── config.yaml          # Main configuration
+├── src/
+│   ├── core/
+│   │   ├── config.py        # Configuration loader
+│   │   ├── logger.py        # Colored logging system
+│   │   ├── http_client.py   # HTTP client with retry/rate-limit
+│   │   ├── models.py        # Finding & ScanResult data models
+│   │   ├── pipeline.py      # Pipeline orchestrator
+│   │   └── report.py        # HTML/JSON/TXT report generator
+│   ├── modules/
+│   │   ├── recon.py         # Reconnaissance module
+│   │   ├── vuln_scanner.py  # Vulnerability scanner
+│   │   ├── security_headers.py # Security headers checker
+│   │   └── auth_testing.py  # Authentication tester
+│   └── utils/
+│       ├── payloads.py      # Injection payload database
+│       └── url_parser.py    # URL parsing utilities
+├── wordlists/
+│   ├── directories.txt      # Directory bruteforce wordlist
+│   └── default_creds.txt    # Default credentials list
+├── tests/
+│   └── test_pipeline.py     # Unit tests
+├── output/                  # Generated reports & logs
+├── main.py                  # CLI entry point
+├── requirements.txt         # Python dependencies
+└── README.md
+```
+
+## Testing
+
+```bash
+python -m pytest tests/ -v
+```
+
+## Disclaimer
+
+This tool is for **authorized security testing only**. Only use it against systems you own or have explicit written permission to test. Unauthorized use is illegal and unethical.
+
+## License
+
+MIT
