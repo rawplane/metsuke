@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any, Tuple
 from urllib.parse import urlparse, urljoin
 
 import requests
+import urllib3
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -54,8 +55,16 @@ class HTTPClient:
                 "https": proxy_https or proxy_http,
             }
 
-        # SSL
-        self.verify_ssl = config.get("verify_ssl", False)
+        # SSL — verify is enabled by default for safety.
+        # Only disable warnings centrally when verification is explicitly turned off
+        # (e.g. for isolated testing against a target with a self-signed certificate).
+        self.verify_ssl = config.get("verify_ssl", True)
+        if not self.verify_ssl:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            self.logger.warning(
+                "SSL certificate verification is DISABLED (verify_ssl=False). "
+                "This should only be used in isolated testing environments."
+            )
 
         # Rate limiting
         self.delay = config.get("delay", 0.1)

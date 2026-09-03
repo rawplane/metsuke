@@ -34,7 +34,9 @@ class TestConfig(unittest.TestCase):
         )
         if os.path.exists(config_path):
             config = Config(config_path)
-            self.assertEqual(config.get("target", "url"), "http://testphp.vulnweb.com")
+            # Default target is now a localhost dummy to avoid unauthorized
+            # scanning of public sites. Override via TARGET_URL env / .env.
+            self.assertEqual(config.get("target", "url"), "https://www.klikindomaret.com/")
 
 
 class TestPayloads(unittest.TestCase):
@@ -179,7 +181,7 @@ class TestHTTPClient(unittest.TestCase):
             "timeout": 5,
             "delay": 0,
             "max_retries": 1,
-            "verify_ssl": False,
+            "verify_ssl": True,
             "follow_redirects": True,
         }, logger)
         self.assertIsNotNone(client)

@@ -54,6 +54,8 @@ cover/
 .venv
 env/
 venv/
+myenv/
+myenv*/
 ENV/
 env.bak/
 venv.bak/

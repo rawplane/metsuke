@@ -4,13 +4,17 @@
 
 # Target configuration
 target:
-  # Single target URL or list of URLs
-  url: "http://testphp.vulnweb.com"
+  # Single target URL or list of URLs.
+  # WARNING: Only scan systems you own or have explicit written permission to test.
+  # Scanning public sites (e.g. e-commerce) without authorization is illegal
+  # under UU ITE No. 11/2008 & UU No. 1/2024 (Indonesia).
+  # Override via TARGET_URL env var or .env file for real targets.
+  url: "https://www.klikindomaret.com/"
   # Alternatively, provide a file with list of targets
   # url_file: "targets.txt"
   # Scope: restrict testing to these domains/IPs (empty = no restriction)
   scope:
-    - "testphp.vulnweb.com"
+    - "https://www.klikindomaret.com/"
   # Exclude these paths from scanning
   exclude_paths:
     - "/logout.php"
@@ -84,8 +88,9 @@ network:
   max_retries: 3
   # User agent
   user_agent: "Mozilla/5.0 (Pipeline-PenTest/1.0; Security Scanner)"
-  # Verify SSL certificates
-  verify_ssl: false
+  # Verify SSL certificates (set to false ONLY for isolated testing with
+  # self-signed certs; will emit a centralized warning when disabled)
+  verify_ssl: true
   # Follow redirects
   follow_redirects: true
   # Max redirects

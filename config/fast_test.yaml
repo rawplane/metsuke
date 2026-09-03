@@ -1,6 +1,7 @@
 # Fast local testing config - minimizes slow network operations
+# WARNING: Only scan systems you own or have explicit written permission to test.
 target:
-  url: "http://127.0.0.1:8888"
+  url: "https://www.klikindomaret.com/"
   scope: []
   exclude_paths: []
 
@@ -53,7 +54,7 @@ network:
   timeout: 3
   max_retries: 1
   user_agent: "Mozilla/5.0 (Pipeline-PenTest/1.0; Security Scanner)"
-  verify_ssl: false
+  verify_ssl: true
   follow_redirects: true
   max_redirects: 3
 

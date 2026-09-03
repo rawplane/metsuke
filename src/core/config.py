@@ -1,11 +1,18 @@
 """
 Configuration loader for the penetration testing pipeline.
-Loads and validates YAML configuration files.
+Loads and validates YAML configuration files, with optional overrides
+from environment variables / .env file (via python-dotenv).
 """
 
 import os
 import yaml
 from typing import Any, Dict, Optional
+
+try:
+    from dotenv import load_dotenv
+    _HAS_DOTENV = True
+except ImportError:
+    _HAS_DOTENV = False
 
 
 class Config:
@@ -33,7 +40,7 @@ class Config:
             "timeout": 15,
             "max_retries": 3,
             "user_agent": "Mozilla/5.0 (Pipeline-PenTest/1.0; Security Scanner)",
-            "verify_ssl": False,
+            "verify_ssl": True,
             "follow_redirects": True,
             "max_redirects": 5,
         },
@@ -51,9 +58,13 @@ class Config:
     }
 
     def __init__(self, config_path: Optional[str] = None):
+        # Load .env file if python-dotenv is available
+        if _HAS_DOTENV:
+            load_dotenv()
         self._config: Dict[str, Any] = {}
         self.config_path = config_path
         self._load_config()
+        self._apply_env_overrides()
 
     def _load_config(self) -> None:
         """Load configuration from YAML file, merging with defaults."""
@@ -64,6 +75,32 @@ class Config:
             with open(self.config_path, "r", encoding="utf-8") as f:
                 user_config = yaml.safe_load(f) or {}
             self._config = self._deep_merge(self._config, user_config)
+
+    def _apply_env_overrides(self) -> None:
+        """
+        Override configuration values using environment variables.
+
+        Supported variables:
+          - TARGET_URL : overrides target.url
+          - HTTP_PROXY : overrides proxy.http
+          - HTTPS_PROXY: overrides proxy.https
+          - AUTH_TOKEN : stored under target.auth_token (not written to YAML)
+        """
+        env_target = os.getenv("TARGET_URL")
+        if env_target:
+            self._config.setdefault("target", {})["url"] = env_target
+
+        env_http_proxy = os.getenv("HTTP_PROXY")
+        if env_http_proxy:
+            self._config.setdefault("proxy", {})["http"] = env_http_proxy
+
+        env_https_proxy = os.getenv("HTTPS_PROXY")
+        if env_https_proxy:
+            self._config.setdefault("proxy", {})["https"] = env_https_proxy
+
+        env_auth_token = os.getenv("AUTH_TOKEN")
+        if env_auth_token:
+            self._config.setdefault("target", {})["auth_token"] = env_auth_token
 
     @staticmethod
     def _deep_copy(d: Dict) -> Dict:
