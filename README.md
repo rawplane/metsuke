@@ -1,4 +1,4 @@
-# 目付 metsuke.sh
+# 目付 metsuke
 
 **Modular recon pipeline with authorization discipline & auditing**
 
