@@ -1,253 +1,182 @@
-# Recon Pipeline v2.0.0
+# 目付 (metsuke.sh)
 
-Automated reconnaissance pipeline untuk fase awal security assessment — subdomain enumeration, live host probing, port scanning, URL discovery, subdomain takeover check, screenshotting, dan vulnerability scanning. Mendukung eksekusi paralel, resume, CDN-aware scanning, dan integrasi opsional dengan **Burp Suite**.
+**Metsuke** (目付) was an inspector role in Edo-era Japan — an officially mandated position, with a clear mandate, to observe and report before acting. This name was chosen because the defining trait of this tool isn't just scan speed, but authorization discipline (a permission-confirmation gate) and structured reporting before performing deep inspection of sensitive endpoints.
 
-> ⚠️ **Legal disclaimer**
-> Script ini hanya boleh dijalankan terhadap target yang sudah kamu miliki izin eksplisit untuk diuji — scope bug bounty resmi, kontrak pentest, atau aset milik sendiri. Scanning tanpa izin melanggar hukum di hampir semua yurisdiksi (di Indonesia termasuk dalam UU ITE). Script akan meminta konfirmasi otorisasi manual setiap kali dijalankan.
->
-> Opsi `--burp-active-scan` bersifat **intrusif** (aktif menyerang endpoint melalui Burp Scanner) — pastikan scope otorisasi kamu eksplisit mengizinkan active scanning, bukan hanya recon pasif. Script akan menampilkan peringatan tambahan dan meminta konfirmasi khusus saat opsi ini aktif.
+> ⚠️ **LEGAL WARNING**
+> This script may **ONLY** be run against targets for which you already have explicit permission. Scanning without authorization is illegal in most jurisdictions. Every execution requires manual authorization confirmation before proceeding.
 
 ---
 
-## Apa yang Baru di v2.0.0
+## Features
 
-| Fitur | Deskripsi |
-|-------|-----------|
-| 🔌 Integrasi Burp Suite | Passive traffic mirroring + active scan trigger (keduanya opsional, default mati) |
-| ⚡ Eksekusi paralel | Phase independen jalan bersamaan, signifikan lebih cepat pada domain besar |
-| ⏸️ Resume | Skip phase yang output-nya sudah ada — aman dilanjutkan kalau scan terputus |
-| 🛡️ CDN-aware scanning | Skip port scan untuk host di belakang Cloudflare/WAF lain |
-| 🔍 Subdomain takeover check | Phase baru pakai nuclei templates `http/takeovers/` |
-| 📄 Config file | Simpan opsi default di file, tidak perlu ketik flag panjang tiap run |
-| 🧪 Dry-run mode | Preview command yang akan dijalankan tanpa eksekusi nyata |
-| 🔁 Retry logic | Panggilan ke crt.sh & Burp API otomatis retry saat gagal/timeout |
-| 📊 JSON report | `results.json` untuk diintegrasikan ke tool/dashboard lain |
-| 📝 Full logging | Semua output tersimpan ke `pipeline.log`, bukan cuma tampil di terminal |
+- 8 sequential/parallel recon phases: subdomain enum → live host probing → port scan → URL discovery → subdomain takeover check → screenshots → vulnerability scan → Burp active scan (optional)
+- Mandatory authorization confirmation gate before any execution
+- `--resume` to skip phases whose output already exists, `--dry-run` to preview commands without executing them
+- CDN-aware port scanning (optionally skip hosts behind a WAF/CDN)
+- Combined URL discovery: passive sources (`gau`, `urlfinder`) + active crawling (`katana`, JS-aware)
+- URL normalization & dedup based on path-templating and parameter-signature (reduces noise from IDs/UUIDs/tokens in URLs)
+- `--extended-workflows` mode to detect sensitive endpoints (admin panels, auth, cloud config, `.env`/`.git`, token/session) and verify which are still live
+- Optional Burp Suite integration: passive proxy mirroring and active scan triggering via REST API
+- Optional webhook notifications per phase
+
+---
 
 ## Requirements
 
-### Wajib
-| Tool | Fungsi | Install |
-|------|--------|---------|
-| [subfinder](https://github.com/projectdiscovery/subfinder) | Subdomain enumeration | `go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest` |
-| [httpx](https://github.com/projectdiscovery/httpx) | Live host probing, CDN detection | `go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest` |
-| [naabu](https://github.com/projectdiscovery/naabu) | Port scanning | `go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest` |
-| [nuclei](https://github.com/projectdiscovery/nuclei) | Vulnerability & takeover scanning | `go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest` |
-| `curl`, `jq` | HTTP request & JSON parsing | `sudo apt install curl jq -y` |
-
-### Opsional (fitur terkait di-skip otomatis jika tidak ada)
-| Tool | Fungsi | Install |
-|------|--------|---------|
-| [assetfinder](https://github.com/tomnomnom/assetfinder) | Sumber tambahan subdomain | `go install -v github.com/tomnomnom/assetfinder@latest` |
-| [gau](https://github.com/lc/gau) | Historical URL discovery | `go install -v github.com/lc/gau/v2/cmd/gau@latest` |
-| [gowitness](https://github.com/sensepost/gowitness) | Screenshot otomatis | `go install -v github.com/sensepost/gowitness@latest` |
-| [Burp Suite](https://portswigger.net/burp) | Passive mirroring / active scan | Community (passive) atau Professional (active scan via REST API) |
-
-Pastikan `$GOPATH/bin` (biasanya `~/go/bin`) sudah masuk `$PATH`:
-```bash
-export PATH=$PATH:$(go env GOPATH)/bin
+**Required:**
+```
+subfinder, httpx, naabu, nuclei, curl, jq
 ```
 
-Update template nuclei secara berkala (juga dipakai untuk takeover check):
-```bash
-nuclei -update-templates
+**Optional** (related features are automatically skipped if not present):
+```
+assetfinder, gau, gowitness, katana, urlfinder
 ```
 
-## Instalasi
+### Quick install
 
 ```bash
-chmod +x recon_pipeline.sh
+go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
+go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
+go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+go install -v github.com/projectdiscovery/katana/cmd/katana@latest
+go install -v github.com/projectdiscovery/urlfinder/cmd/urlfinder@latest
+go install -v github.com/lc/gau/v2/cmd/gau@latest
+go install -v github.com/tomnomnom/assetfinder@latest
+sudo apt install jq curl -y
 ```
 
-## Penggunaan
+Make sure `$GOPATH/bin` is in your `$PATH`. This script does **not** automatically install tools or modify your shell profile files — installation must be done manually.
+
+---
+
+## Usage
 
 ```bash
-./recon_pipeline.sh -d <domain> [opsi]
+chmod +x metsuke.sh
+./metsuke.sh -d <domain> [options]
 ```
 
-### Opsi Dasar
+When run, you will be asked to type `I HAVE AUTHORIZATION` to confirm authorization before the pipeline continues.
 
-| Flag | Deskripsi | Default |
-|------|-----------|---------|
-| `-d <domain>` | Target domain (wajib) | — |
-| `-o <dir>` | Direktori output | `./recon_<domain>_<timestamp>` |
-| `-t <threads>` | Jumlah concurrent threads | `50` |
-| `--full` | Mode agresif: full port scan (1-65535) + semua severity nuclei | `false` |
-| `--config <file>` | Load opsi default dari file config (bash source) | — |
-| `-h` | Tampilkan bantuan | — |
+### Basic options
 
-### Opsi Performa
+| Option | Description |
+|---|---|
+| `-d <domain>` | Target domain (required), e.g.: `example.com` |
+| `-o <dir>` | Output directory (default: `./recon_<domain>_<timestamp>`) |
+| `-t <threads>` | Number of concurrent threads (default: `50`) |
+| `--full` | Aggressive mode: full port scan (1–65535) + all nuclei severities |
+| `--config <file>` | Load default options from a config file (bash source) |
+| `-h` | Show help |
 
-| Flag | Deskripsi |
-|------|-----------|
-| `--sequential` | Jalankan semua phase berurutan (default: paralel) |
-| `--resume` | Skip phase yang output-nya sudah ada dari run sebelumnya |
-| `--skip-cdn` | Skip port scanning untuk host yang terdeteksi di belakang CDN/WAF |
-| `--dry-run` | Tampilkan command yang akan dijalankan tanpa eksekusi |
+### Performance options
 
-### Opsi Integrasi Burp Suite (opsional, default mati)
+| Option | Description |
+|---|---|
+| `--sequential` | Run all phases sequentially (default: parallel) |
+| `--resume` | Skip phases whose output already exists from a previous run |
+| `--skip-cdn` | Skip port scanning for hosts behind a CDN/WAF |
+| `--dry-run` | Show the commands that would run without executing them |
 
-| Flag | Deskripsi |
-|------|-----------|
-| `--burp` | Mirror traffic `httpx` ke Burp proxy — Site Map terisi otomatis |
-| `--burp-proxy <host:port>` | Alamat Burp proxy (default `127.0.0.1:8080`) |
-| `--burp-active-scan` | Trigger **active scan** via Burp REST API (⚠️ intrusif) |
-| `--burp-api-url <url>` | Alamat Burp REST API (default `http://127.0.0.1:1337`) |
-| `--burp-api-key <key>` | API key Burp REST API (atau via `export BURP_API_KEY=...`) |
+### Advanced URL discovery options
 
-### Contoh
+| Option | Description |
+|---|---|
+| `--katana` | Active crawling with `katana` (JS-aware) in addition to the passive `gau` source |
+| `--web-archives` | Use `urlfinder` (wayback/CT logs etc.) as an additional source |
+| `--extended-workflows` | Detect sensitive endpoints (admin/auth/cloud-config/`.env`/`.git`) and verify which are live |
+| `--session-header "H: V"` | Extra header for crawling (e.g. a session cookie), can be repeated for multiple headers |
+
+### Burp Suite integration (optional, default off)
+
+| Option | Description |
+|---|---|
+| `--burp` | Mirror `httpx` traffic to a Burp proxy (auto-populates the Site Map) |
+| `--burp-proxy <host:port>` | Burp proxy address (default: `127.0.0.1:8080`) |
+| `--burp-active-scan` | Trigger an **active scan** via the Burp REST API — **INTRUSIVE**, actively attacks endpoints |
+| `--burp-api-url <url>` | Burp REST API address (default: `http://127.0.0.1:1337`) |
+| `--burp-api-key <key>` | Burp REST API key (or set env `BURP_API_KEY`) |
+
+---
+
+## Examples
 
 ```bash
-# Scan standar
-./recon_pipeline.sh -d example.com
+# Basic recon
+./metsuke.sh -d example.com
 
-# Custom output dir, threads tinggi, skip CDN, bisa dilanjut kalau terputus
-./recon_pipeline.sh -d example.com -o ./hasil -t 100 --skip-cdn --resume
+# Full scan + resume, custom output
+./metsuke.sh -d example.com -o ./results -t 100 --full --resume
 
-# Mode agresif (full port range + semua severity nuclei)
-./recon_pipeline.sh -d example.com --full
+# Advanced URL discovery: active crawl + search for sensitive endpoints
+./metsuke.sh -d example.com --katana --extended-workflows
 
-# Preview dulu tanpa eksekusi nyata
-./recon_pipeline.sh -d example.com --dry-run
+# Crawl with an authenticated session
+./metsuke.sh -d example.com --session-header "Cookie: session=abcd" --katana
 
-# Dengan notifikasi Slack/Discord
-export RECON_WEBHOOK_URL="https://hooks.slack.com/services/xxx/yyy/zzz"
-./recon_pipeline.sh -d example.com
+# Preview without executing
+./metsuke.sh -d example.com --full --dry-run
 
-# Load opsi dari config file
-./recon_pipeline.sh -d example.com --config ./myconfig.conf
+# With Burp Suite (passive mirror)
+./metsuke.sh -d example.com --burp --burp-proxy 127.0.0.1:8080
+
+# Active scan trigger (INTRUSIVE — make sure scope allows it)
+./metsuke.sh -d example.com --burp-active-scan --burp-api-key abcd1234
 ```
 
-### Contoh Integrasi Burp Suite
+---
 
-```bash
-# 1) Passive mirroring saja
-#    Buka Burp Suite, pastikan proxy listener aktif di 127.0.0.1:8080, lalu:
-./recon_pipeline.sh -d example.com --burp
-
-# 2) Passive mirroring dengan port proxy custom
-./recon_pipeline.sh -d example.com --burp --burp-proxy 127.0.0.1:9090
-
-# 3) Passive + active scan (butuh Burp Suite Professional, REST API enabled)
-export BURP_API_KEY="abcd1234-your-api-key"
-./recon_pipeline.sh -d example.com --burp --burp-active-scan
-```
-
-**Cara aktifkan Burp REST API** (untuk opsi active scan): buka Burp Suite → `Settings` → `Suite` → `REST API` → aktifkan, generate API key. Jika endpoint di script tidak cocok dengan versi Burp kamu, cek dokumentasi Swagger di `{BURP_API_URL}/swagger.json` — format REST API bisa sedikit berbeda antar versi Burp.
-
-Saat dijalankan, script akan meminta konfirmasi:
-```
-Ketik 'YA SAYA PUNYA IZIN' untuk melanjutkan:
-```
-Kalau `--burp-active-scan` aktif, akan muncul peringatan tambahan sebelum prompt konfirmasi ini — pastikan scope otorisasi memang mencakup active scanning.
-
-## Config File
-
-Simpan opsi yang sering dipakai di file config (format bash variable):
-
-```bash
-# myconfig.conf
-THREADS=100
-SKIP_CDN=true
-BURP_PASSIVE=true
-BURP_PROXY_HOST="127.0.0.1"
-BURP_PROXY_PORT="8080"
-NUCLEI_SEVERITY="medium,high,critical"
-```
-
-```bash
-./recon_pipeline.sh -d example.com --config ./myconfig.conf
-```
-
-Flag CLI yang diberikan setelah `--config` akan override nilai dari file config.
-
-## Alur Pipeline
-
-```
-┌──────────────────────┐
-│ 1. Subdomain Enum     │  subfinder + assetfinder + crt.sh (retry) → dedupe
-└──────────┬────────────┘
-           ▼
-┌──────────────────────┐
-│ 2. Live Host Probing  │  httpx: status, title, tech, CDN detection
-│    (+ Burp passive)   │  → traffic di-mirror ke Burp proxy jika --burp aktif
-└──────────┬────────────┘
-           ▼
-     ┌─────┴─────────────────────────────────────────────────────┐
-     │            PARALEL (default) atau SEQUENTIAL                │
-     │                                                               │
-     │  3. Port Scan (CDN-aware)   6. Screenshot (gowitness)        │
-     │  4. URL Discovery (gau)     7. Vuln Scan (nuclei)             │
-     │  5. Takeover Check (nuclei) 8. Burp Active Scan (opsional)    │
-     └─────┬─────────────────────────────────────────────────────┘
-           ▼
-┌──────────────────────┐
-│ Report Generation     │  summary.md + results.json
-└──────────────────────┘
-```
-
-Tiap phase independen — kalau satu tool tidak terinstall atau gagal, pipeline lanjut dan mencatat warning, bukan berhenti total. Phase 3-8 berjalan **paralel secara default** karena semuanya cuma bergantung pada output Phase 1-2; pakai `--sequential` kalau mau eksekusi berurutan (misal untuk debugging atau resource terbatas).
-
-## Struktur Output
+## Output structure
 
 ```
 recon_<domain>_<timestamp>/
-├── pipeline.log                    # log lengkap seluruh eksekusi
-├── scope.txt                       # domain target (audit trail)
+├── scope.txt                     # target domain
+├── pipeline.log                  # full execution log
 ├── subdomains/
-│   ├── subfinder.txt
-│   ├── assetfinder.txt
-│   ├── crtsh.txt
-│   └── all_subdomains.txt          # hasil gabungan, deduped
+│   ├── subfinder.txt / assetfinder.txt / crtsh.txt
+│   └── all_subdomains.txt        # merged + deduplicated results
 ├── httpx/
-│   ├── httpx_full.json             # detail lengkap (status, title, tech, cdn, IP)
-│   ├── live_hosts.txt              # daftar URL host yang live
-│   └── cdn_hosts.txt               # host yang terdeteksi di belakang CDN/WAF
+│   ├── httpx_full.json
+│   ├── live_hosts.txt
+│   └── cdn_hosts.txt
 ├── ports/
-│   ├── targets_noncdn.txt          # target port scan setelah filter CDN (jika --skip-cdn)
-│   └── open_ports.txt              # host:port yang terbuka
+│   └── open_ports.txt
 ├── urls/
-│   ├── all_urls.txt                # semua historical URL
-│   ├── js_files.txt                # file .js yang ditemukan
-│   ├── urls_with_params.txt        # URL dengan parameter (kandidat testing)
-│   └── interesting_urls.txt        # admin/api/backup/.env/swagger/dll
-├── screenshots/                    # screenshot per host (jika gowitness ada)
+│   ├── all_urls_raw.txt          # before dedup
+│   ├── all_urls.txt              # after normalization + dedup
+│   ├── js_files.txt
+│   ├── urls_with_params.txt
+│   ├── interesting_urls.txt
+│   └── extended_sensitive_endpoints.txt   # if --extended-workflows
+├── screenshots/
 ├── vulns/
-│   ├── nuclei_results.jsonl        # temuan vulnerability, format JSON lines
-│   └── takeover_results.jsonl      # indikasi subdomain takeover
+│   ├── takeover_results.jsonl
+│   └── nuclei_results.jsonl
 └── report/
-    ├── summary.md                  # ringkasan akhir + rekomendasi next step
-    ├── results.json                # ringkasan format JSON (untuk integrasi tool lain)
-    └── burp_scan_response.json     # response dari Burp REST API (jika --burp-active-scan)
+    ├── summary.txt
+    └── burp_scan_response.json   # if --burp-active-scan
 ```
 
-## Langkah Setelah Recon
+---
 
-1. Cek `vulns/nuclei_results.jsonl` dan `vulns/takeover_results.jsonl` dulu — prioritaskan severity `high`/`critical` dan indikasi takeover.
-2. Review manual `urls/interesting_urls.txt` untuk kemungkinan exposed config/admin panel.
-3. Kalau `--burp` aktif, buka Site Map di Burp Suite — struktur target sudah ter-mirror di sana untuk analisis manual lanjutan (manual testing, Repeater, dll).
-4. Kalau `--burp-active-scan` aktif, cek progress di tab Scanner/Dashboard Burp Suite.
-5. Lakukan content discovery lanjutan (`ffuf`/`gobuster`) pada host-host prioritas.
-6. **Verifikasi manual setiap temuan** sebelum dilaporkan — hasil tool otomatis rawan false positive.
+## Pipeline phases
 
-## Kustomisasi
+1. **Subdomain Enumeration** — `subfinder`, `assetfinder`, crt.sh (with retry)
+2. **Live Host Probing** — `httpx` (status code, title, tech-detect, CDN detection), optional mirroring to Burp
+3. **Port Scanning** — `naabu`, CDN-aware if `--skip-cdn`
+4. **URL & Endpoint Discovery** — `gau`/`urlfinder` (passive) + `katana` (active, `--katana`), then URL normalization/dedup; if `--extended-workflows`, scans for sensitive endpoint patterns and verifies live status
+5. **Subdomain Takeover Check** — `nuclei` `http/takeovers/` templates
+6. **Screenshots** — `gowitness` (optional)
+7. **Vulnerability Scanning** — `nuclei` according to the selected severity
+8. **Burp Active Scan Trigger** — only if `--burp-active-scan` and `BURP_API_KEY` are provided
 
-- **Severity nuclei default**: ubah variabel `NUCLEI_SEVERITY` di bagian atas script, atau lewat config file.
-- **Rate limiting**: sesuaikan `-rate` di `naabu` dan `-rate-limit` di `nuclei` kalau target sensitif terhadap traffic tinggi.
-- **Tambah sumber subdomain**: tambahkan tool baru di fungsi `phase_subdomain_enum()`, pipe hasilnya ke file `.txt` di folder `subdomains/`, otomatis ikut ter-merge.
-- **Tambah phase paralel baru**: tambahkan function `phase_xxx()` lalu daftarkan di `run_independent_phases()` (baik di blok paralel maupun sequential).
-- **Ganti endpoint Burp REST API**: kalau format API berubah di versi Burp kamu, edit variabel `endpoint` di dalam `phase_burp_active_scan()`.
-- **CI/CD integration**: prompt konfirmasi otorisasi bisa diganti dengan environment variable check (mis. `RECON_AUTHORIZED=true`) untuk dijalankan non-interaktif — pastikan tetap ada guardrail di level lain (mis. daftar domain yang di-whitelist), dan sebaiknya jangan aktifkan `--burp-active-scan` di pipeline otomatis tanpa review manusia.
+---
 
-## Troubleshooting
+## Security notes
 
-| Masalah | Solusi |
-|---------|--------|
-| `command not found` untuk tool ProjectDiscovery | Cek `$PATH` sudah include `$(go env GOPATH)/bin` |
-| `crt.sh` query timeout/kosong | Layanan crt.sh kadang rate-limit atau down; script sudah retry otomatis 3x, kalau tetap gagal source ini di-skip |
-| Hasil nuclei kosong padahal ada temuan manual | Update templates: `nuclei -update-templates` |
-| Port scan lambat | Turunkan `-rate` di naabu, kurangi jumlah target sekaligus, atau pakai `--skip-cdn` |
-| `Burp proxy TIDAK reachable` | Pastikan Burp Suite terbuka dan proxy listener aktif di host:port yang sama dengan `--burp-proxy` |
-| `--burp-active-scan` gagal trigger | Cek API key benar, REST API sudah diaktifkan di Burp settings, dan endpoint sesuai versi Burp (lihat `{BURP_API_URL}/swagger.json`) |
-| Mau lanjut scan yang terputus | Jalankan ulang command yang sama + tambahkan `--resume` |
-| Ingin skip konfirmasi otorisasi | Jangan — itu ada agar tidak sengaja mengarah ke target yang salah. Untuk automation internal, ganti dengan approval gate di level CI/CD |
+- Every execution requires manual authorization confirmation — there is no bypass mode.
+- `--extended-workflows` still relies on passive GET requests (not exploits), but specifically searches for potentially sensitive information (credentials, cloud configuration, admin panels). Make sure your scope allows this kind of search.
+- `--burp-active-scan` is intrusive and will send active payloads to target endpoints — only use it if your authorization scope explicitly allows active scanning.
+- Session headers provided via `--session-header` are temporarily stored with `600` permissions in the output directory; delete/protect the output directory according to your organization's sensitive-data policy.
