@@ -1,4 +1,4 @@
-# 目付 metsuke
+# 目付 Metsuke
 
 **Modular recon pipeline with authorization discipline & auditing**
 
