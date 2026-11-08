@@ -385,7 +385,11 @@ EOF
 
 check_tcp_port() {
     local host="$1" port="$2"
-    # host/port are validated against strict character classes before use
+    # Strict validation: host must be valid DNS name/IP, port numeric 1-65535
+    [[ "$host" =~ ^[a-zA-Z0-9.-]+$ ]] || return 1
+    [[ "$port" =~ ^[0-9]+$ ]] || return 1
+    (( port >= 1 && port <= 65535 )) || return 1
+
     if [[ -n "$TIMEOUT_BIN" ]]; then
         "$TIMEOUT_BIN" 3 bash -c "cat < /dev/null > /dev/tcp/${host}/${port}" 2>/dev/null
     else
@@ -938,11 +942,12 @@ METSUKE_SECRET_PATTERNS='(AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|gh[pousr]
 
 # Runs in an xargs-spawned child bash — keep it self-contained.
 js_fetch_one() {
-    local url="$1" tmp hit
+    local url="$1" tmp hit worker_out
     tmp=$(mktemp) || return 0
     curl -s --max-time 20 --max-filesize 5000000 "$url" -o "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+    worker_out=$(mktemp -p "$METSUKE_JS_TMP_DIR" worker_XXXXXX.txt 2>/dev/null) || { rm -f "$tmp"; return 0; }
     grep -aoE "$METSUKE_SECRET_PATTERNS" "$tmp" 2>/dev/null | sort -u | while IFS= read -r hit; do
-        printf '%s\t%s\n' "$url" "$hit" >> "$METSUKE_JS_SECRETS_OUT"
+        printf '%s\t%s\n' "$url" "$hit" >> "$worker_out"
     done
     rm -f "$tmp"
 }
@@ -967,14 +972,18 @@ phase_js_secret_scan() {
     fi
 
     log_ext "Fetching JS files and scanning for hardcoded credential patterns (passive GETs)..."
-    : > "$out"
+    local tmp_dir="$OUTDIR/vulns/.js_tmp"
+    mkdir -p "$tmp_dir"
+    export METSUKE_JS_TMP_DIR="$tmp_dir"
     export METSUKE_SECRET_PATTERNS
-    export METSUKE_JS_SECRETS_OUT="$out"
     export -f js_fetch_one
 
     # xargs -I{} performs literal whole-line replacement (no shell word-splitting on URLs)
     head -n "$MAX_JS_FILES" "$in" \
         | xargs -P "$JS_CONCURRENCY" -I{} bash -c 'js_fetch_one "$1"' _ {}
+
+    find "$tmp_dir" -type f -name 'worker_*.txt' -exec cat {} + 2>/dev/null | sort -u > "$out"
+    rm -rf "$tmp_dir"
 
     local count
     count=$(count_lines "$out")
