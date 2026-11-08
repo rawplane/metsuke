@@ -839,7 +839,8 @@ phase_url_discovery() {
             log "Collecting historical URLs from gau (passive source)..."
             printf '%s\n' "$DOMAIN" \
                 | run_with_timeout 900 gau --threads "$THREADS" --subs 2>/dev/null \
-                >> "$out/.sources_raw.txt"
+                | grep -E "^(https?://)?([a-zA-Z0-9.-]+\.)?${DOMAIN_ESCAPED}(:[0-9]+)?(/|$)" \
+                >> "$out/.sources_raw.txt" || true
         fi
     else
         log_warn "gau is not installed, skipping this passive source."
@@ -853,7 +854,9 @@ phase_url_discovery() {
             log "[DRY-RUN] urlfinder -d $DOMAIN -silent"
         else
             log "Collecting historical URLs via urlfinder (--web-archives)..."
-            run_with_timeout 600 urlfinder -d "$DOMAIN" -silent 2>/dev/null >> "$out/.sources_raw.txt"
+            run_with_timeout 600 urlfinder -d "$DOMAIN" -silent 2>/dev/null \
+                | grep -E "^(https?://)?([a-zA-Z0-9.-]+\.)?${DOMAIN_ESCAPED}(:[0-9]+)?(/|$)" \
+                >> "$out/.sources_raw.txt" || true
         fi
     fi
 
@@ -1184,7 +1187,7 @@ generate_summary() {
 
     cat > "$OUTDIR/report/summary.txt" <<EOF
 
- ${BOLD}目付 (metsuke) — Recon Summary — $DOMAIN${NC}
+ 目付 (metsuke) — Recon Summary — $DOMAIN
 Started           : $START_ISO
 Duration          : ${elapsed}s
 Output            : $OUTDIR
