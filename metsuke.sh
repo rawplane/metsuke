@@ -1220,8 +1220,53 @@ EOF
                    nuclei_findings: $nuclei_findings}}' \
         > "$OUTDIR/report/summary.json"
 
+    # Generate SHA-256 integrity manifest for artifacts
+    if command -v sha256sum &>/dev/null; then
+        (
+            cd "$OUTDIR" && \
+            find . -type f ! -path "./report/artifacts.sha256" ! -name "pipeline.log" ! -name "audit.log" ! -path "*/.*" -exec sha256sum {} + | sort -k2
+        ) > "$OUTDIR/report/artifacts.sha256" 2>/dev/null || true
+        log_ok "Artifact checksums written to: $OUTDIR/report/artifacts.sha256"
+    fi
+
     log_ok "Done. All results saved to: $OUTDIR (summary.txt / summary.json)"
     notify "metsuke finished: $DOMAIN in ${elapsed}s — subdomains=$subs live=$lives nuclei=$nuc takeover=$take"
+}
+
+load_config_file() {
+    local cfg="$1"
+    local line key val
+    local allowed_keys=" THREADS FULL_SCAN RESUME SKIP_CDN DRY_RUN NUCLEI_SEVERITY NUCLEI_TAGS UPDATE_TEMPLATES WEBHOOK_URL NO_NOTIFY RATE_LIMIT HTTP_TIMEOUT PARALLEL_MODE USE_KATANA EXTENDED_WORKFLOWS USE_WEB_ARCHIVES PASSIVE_ONLY NO_INTERACTSH SESSION_HEADERS_FILE BURP_PASSIVE BURP_ACTIVE_SCAN BURP_PROXY_HOST BURP_PROXY_PORT BURP_API_URL BURP_API_KEY MAX_JS_FILES JS_CONCURRENCY OUTDIR "
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" || "$line" =~ ^# ]] && continue
+
+        if [[ ! "$line" =~ ^([A-Z0-9_]+)=(.*)$ ]]; then
+            log_warn "Config: skipping malformed line: $line"
+            continue
+        fi
+
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+
+        if [[ ! "$allowed_keys" =~ [[:space:]]"$key"[[:space:]] ]]; then
+            log_warn "Config: unrecognized key '$key', skipping."
+            continue
+        fi
+
+        if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then
+            val="${BASH_REMATCH[1]}"
+        fi
+
+        if [[ "$val" =~ [\;\$\`\(\)\&\|\<\>] ]]; then
+            log_warn "Config: key '$key' contains forbidden characters, skipping."
+            continue
+        fi
+
+        printf -v "$key" "%s" "$val"
+    done < "$cfg"
 }
 
 # ─────────────────────────────── Argument Parsing ───────────────────────────────
@@ -1233,8 +1278,7 @@ for (( _i=0; _i<${#_pre_args[@]}; _i++ )); do
         _cfg="${_pre_args[$((_i+1))]:-}"
         [[ -n "$_cfg" ]] || { echo "[!] --config requires a file path" >&2; exit 1; }
         [[ -f "$_cfg" ]] || { echo "[!] Config file not found: $_cfg" >&2; exit 1; }
-        # shellcheck disable=SC1090
-        source "$_cfg"
+        load_config_file "$_cfg"
         CONFIG_FILE="$_cfg"
         break
     fi
