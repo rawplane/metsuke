@@ -385,7 +385,11 @@ EOF
 
 check_tcp_port() {
     local host="$1" port="$2"
-    # host/port are validated against strict character classes before use
+    # Strict validation: host must be valid DNS name/IP, port numeric 1-65535
+    [[ "$host" =~ ^[a-zA-Z0-9.-]+$ ]] || return 1
+    [[ "$port" =~ ^[0-9]+$ ]] || return 1
+    (( port >= 1 && port <= 65535 )) || return 1
+
     if [[ -n "$TIMEOUT_BIN" ]]; then
         "$TIMEOUT_BIN" 3 bash -c "cat < /dev/null > /dev/tcp/${host}/${port}" 2>/dev/null
     else
@@ -835,7 +839,8 @@ phase_url_discovery() {
             log "Collecting historical URLs from gau (passive source)..."
             printf '%s\n' "$DOMAIN" \
                 | run_with_timeout 900 gau --threads "$THREADS" --subs 2>/dev/null \
-                >> "$out/.sources_raw.txt"
+                | grep -E "^(https?://)?([a-zA-Z0-9.-]+\.)?${DOMAIN_ESCAPED}(:[0-9]+)?(/|$)" \
+                >> "$out/.sources_raw.txt" || true
         fi
     else
         log_warn "gau is not installed, skipping this passive source."
@@ -849,7 +854,9 @@ phase_url_discovery() {
             log "[DRY-RUN] urlfinder -d $DOMAIN -silent"
         else
             log "Collecting historical URLs via urlfinder (--web-archives)..."
-            run_with_timeout 600 urlfinder -d "$DOMAIN" -silent 2>/dev/null >> "$out/.sources_raw.txt"
+            run_with_timeout 600 urlfinder -d "$DOMAIN" -silent 2>/dev/null \
+                | grep -E "^(https?://)?([a-zA-Z0-9.-]+\.)?${DOMAIN_ESCAPED}(:[0-9]+)?(/|$)" \
+                >> "$out/.sources_raw.txt" || true
         fi
     fi
 
@@ -938,11 +945,12 @@ METSUKE_SECRET_PATTERNS='(AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|gh[pousr]
 
 # Runs in an xargs-spawned child bash — keep it self-contained.
 js_fetch_one() {
-    local url="$1" tmp hit
+    local url="$1" tmp hit worker_out
     tmp=$(mktemp) || return 0
     curl -s --max-time 20 --max-filesize 5000000 "$url" -o "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+    worker_out=$(mktemp -p "$METSUKE_JS_TMP_DIR" worker_XXXXXX.txt 2>/dev/null) || { rm -f "$tmp"; return 0; }
     grep -aoE "$METSUKE_SECRET_PATTERNS" "$tmp" 2>/dev/null | sort -u | while IFS= read -r hit; do
-        printf '%s\t%s\n' "$url" "$hit" >> "$METSUKE_JS_SECRETS_OUT"
+        printf '%s\t%s\n' "$url" "$hit" >> "$worker_out"
     done
     rm -f "$tmp"
 }
@@ -967,14 +975,18 @@ phase_js_secret_scan() {
     fi
 
     log_ext "Fetching JS files and scanning for hardcoded credential patterns (passive GETs)..."
-    : > "$out"
+    local tmp_dir="$OUTDIR/vulns/.js_tmp"
+    mkdir -p "$tmp_dir"
+    export METSUKE_JS_TMP_DIR="$tmp_dir"
     export METSUKE_SECRET_PATTERNS
-    export METSUKE_JS_SECRETS_OUT="$out"
     export -f js_fetch_one
 
     # xargs -I{} performs literal whole-line replacement (no shell word-splitting on URLs)
     head -n "$MAX_JS_FILES" "$in" \
         | xargs -P "$JS_CONCURRENCY" -I{} bash -c 'js_fetch_one "$1"' _ {}
+
+    find "$tmp_dir" -type f -name 'worker_*.txt' -exec cat {} + 2>/dev/null | sort -u > "$out"
+    rm -rf "$tmp_dir"
 
     local count
     count=$(count_lines "$out")
@@ -1175,7 +1187,7 @@ generate_summary() {
 
     cat > "$OUTDIR/report/summary.txt" <<EOF
 
- ${BOLD}目付 (metsuke) — Recon Summary — $DOMAIN${NC}
+ 目付 (metsuke) — Recon Summary — $DOMAIN
 Started           : $START_ISO
 Duration          : ${elapsed}s
 Output            : $OUTDIR
@@ -1208,8 +1220,53 @@ EOF
                    nuclei_findings: $nuclei_findings}}' \
         > "$OUTDIR/report/summary.json"
 
+    # Generate SHA-256 integrity manifest for artifacts
+    if command -v sha256sum &>/dev/null; then
+        (
+            cd "$OUTDIR" && \
+            find . -type f ! -path "./report/artifacts.sha256" ! -name "pipeline.log" ! -name "audit.log" ! -path "*/.*" -exec sha256sum {} + | sort -k2
+        ) > "$OUTDIR/report/artifacts.sha256" 2>/dev/null || true
+        log_ok "Artifact checksums written to: $OUTDIR/report/artifacts.sha256"
+    fi
+
     log_ok "Done. All results saved to: $OUTDIR (summary.txt / summary.json)"
     notify "metsuke finished: $DOMAIN in ${elapsed}s — subdomains=$subs live=$lives nuclei=$nuc takeover=$take"
+}
+
+load_config_file() {
+    local cfg="$1"
+    local line key val
+    local allowed_keys=" THREADS FULL_SCAN RESUME SKIP_CDN DRY_RUN NUCLEI_SEVERITY NUCLEI_TAGS UPDATE_TEMPLATES WEBHOOK_URL NO_NOTIFY RATE_LIMIT HTTP_TIMEOUT PARALLEL_MODE USE_KATANA EXTENDED_WORKFLOWS USE_WEB_ARCHIVES PASSIVE_ONLY NO_INTERACTSH SESSION_HEADERS_FILE BURP_PASSIVE BURP_ACTIVE_SCAN BURP_PROXY_HOST BURP_PROXY_PORT BURP_API_URL BURP_API_KEY MAX_JS_FILES JS_CONCURRENCY OUTDIR "
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" || "$line" =~ ^# ]] && continue
+
+        if [[ ! "$line" =~ ^([A-Z0-9_]+)=(.*)$ ]]; then
+            log_warn "Config: skipping malformed line: $line"
+            continue
+        fi
+
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+
+        if [[ ! "$allowed_keys" =~ [[:space:]]"$key"[[:space:]] ]]; then
+            log_warn "Config: unrecognized key '$key', skipping."
+            continue
+        fi
+
+        if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then
+            val="${BASH_REMATCH[1]}"
+        fi
+
+        if [[ "$val" =~ [\;\$\`\(\)\&\|\<\>] ]]; then
+            log_warn "Config: key '$key' contains forbidden characters, skipping."
+            continue
+        fi
+
+        printf -v "$key" "%s" "$val"
+    done < "$cfg"
 }
 
 # ─────────────────────────────── Argument Parsing ───────────────────────────────
@@ -1221,8 +1278,7 @@ for (( _i=0; _i<${#_pre_args[@]}; _i++ )); do
         _cfg="${_pre_args[$((_i+1))]:-}"
         [[ -n "$_cfg" ]] || { echo "[!] --config requires a file path" >&2; exit 1; }
         [[ -f "$_cfg" ]] || { echo "[!] Config file not found: $_cfg" >&2; exit 1; }
-        # shellcheck disable=SC1090
-        source "$_cfg"
+        load_config_file "$_cfg"
         CONFIG_FILE="$_cfg"
         break
     fi
